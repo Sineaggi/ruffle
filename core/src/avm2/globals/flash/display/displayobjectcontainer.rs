@@ -5,14 +5,19 @@ use crate::avm2::class::Class;
 use crate::avm2::method::{Method, NativeMethodImpl};
 use crate::avm2::object::{Object, TObject};
 use crate::avm2::value::Value;
-use crate::avm2::Error;
+use crate::avm2::{ArrayStorage, Error};
 use crate::avm2::Multiname;
 use crate::avm2::Namespace;
 use crate::avm2::QName;
 use crate::context::UpdateContext;
-use crate::display_object::{DisplayObject, TDisplayObject, TDisplayObjectContainer};
+use crate::display_object::{DisplayObject, TDisplayObject, TDisplayObjectContainer, DisplayObjectContainer};
 use gc_arena::{GcCell, MutationContext};
 use std::cmp::min;
+use swf::Twips;
+use crate::avm2::globals::array::build_array;
+//use crate::avm2::globals::{Point};
+//use crate::avm1::globals::point::{construct_new_point, point_to_object, value_to_point};
+
 
 /// Implements `flash.display.DisplayObjectContainer`'s instance constructor.
 pub fn instance_init<'gc>(
@@ -560,11 +565,49 @@ pub fn stop_all_movie_clips<'gc>(
 
 /// Stubs `DisplayObjectContainer.getObjectsUnderPoint`
 pub fn get_objects_under_point<'gc>(
-    _activation: &mut Activation<'_, 'gc>,
-    _this: Option<Object<'gc>>,
-    _args: &[Value<'gc>],
+    activation: &mut Activation<'_, 'gc>,
+    this: Option<Object<'gc>>,
+    args: &[Value<'gc>],
 ) -> Result<Value<'gc>, Error<'gc>> {
-    Err("DisplayObjectContainer.getObjectsUnderPoint not yet implemented".into())
+    if let Some(dobj) = this
+        .and_then(|this| this.as_display_object()
+            .and_then(|this| this.as_container())) {
+        let point = args
+            .get(0)
+            .unwrap_or(&Value::Undefined)
+            .coerce_to_object(activation)?;
+        let x = point
+            .get_property(&Multiname::public("x"), activation)?
+            .coerce_to_number(activation)?;
+        let y = point
+            .get_property(&Multiname::public("y"), activation)?
+            .coerce_to_number(activation)?;
+        let point = (Twips::from_pixels(x), Twips::from_pixels(y));
+
+        let array = get_objects_under_point_recurse(dobj, point);
+        return build_array(activation, array);
+    }
+
+    let new_array = ArrayStorage::new(0);
+    return build_array(activation, new_array);
+}
+
+fn get_objects_under_point_recurse(
+    dobj: DisplayObjectContainer,
+    point: (Twips, Twips),
+) -> ArrayStorage {
+    let mut new_array = ArrayStorage::new(0);
+    for child in dobj.iter_render_list() {
+        if let Some(child_ctr) = child.as_container() {
+            let elements = get_objects_under_point_recurse(child_ctr, point);
+            new_array.append(&elements);
+        } else {
+            if child.bounds().contains(point) {
+                new_array.push(child.object2());
+            }
+        }
+    }
+    new_array
 }
 
 /// Stubs `DisplayObjectContainer.areInaccessibleObjectsUnderPoint`
